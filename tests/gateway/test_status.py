@@ -11,7 +11,6 @@ from types import SimpleNamespace
 import pytest
 
 from gateway import status
-from gateway.status_scoped_locks import release_all_scoped_locks, release_scoped_lock
 from datetime import UTC
 
 
@@ -890,7 +889,7 @@ class TestScopedLocks:
         }))
         monkeypatch.setattr(status, "_get_process_start_time", lambda pid: 987654321)
 
-        release_scoped_lock("discord-bot-token", "secret")
+        status.release_scoped_lock("discord-bot-token", "secret")
 
         assert not lock_path.exists()
 
@@ -1008,7 +1007,7 @@ class TestScopedLocks:
             "kind": "hermes-gateway",
         }))
 
-        removed = release_all_scoped_locks(
+        removed = status.release_all_scoped_locks(
             owner_pid=111,
             owner_start_time=222,
         )
