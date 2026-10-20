@@ -92,8 +92,7 @@ from gateway.platforms.base import (
     cache_audio_from_bytes_async, cache_image_from_bytes_async,
 )
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
-from gateway.status import acquire_scoped_lock
-from gateway.status_scoped_locks import release_scoped_lock
+from gateway.status import acquire_scoped_lock, release_scoped_lock
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write, env_float, env_int
 
@@ -3463,10 +3462,9 @@ class FeishuAdapter(BasePlatformAdapter):
         return bool(sender_ids and (sender_ids & self._allowed_group_users))
 
     def _mentions_self(self, message: Any) -> bool:
-        # @_all is Feishu's @everyone placeholder.
+        # Feishu encodes @everyone as @_all. It is deliberately not treated as a
+        # mention of this bot; only an explicit bot mention should wake it.
         raw_content = getattr(message, "content", "") or ""
-        if "@_all" in raw_content:
-            return True
         mentions = getattr(message, "mentions", None) or []
         if mentions and self._message_mentions_bot(mentions):
             return True
