@@ -119,6 +119,26 @@ describe('StatusRule model label', () => {
   })
 })
 
+describe('StatusRule provider quota', () => {
+  it('renders GLM/GPT subscription windows when the gateway supplies them', () => {
+    const text = textContent(
+      StatusRule({
+        ...baseProps,
+        usage: {
+          ...baseProps.usage,
+          provider_quota: {
+            label: 'GPT',
+            plan: 'Prolite',
+            windows: [{ label: 'wk', used_percent: 3 }]
+          }
+        }
+      })
+    )
+
+    expect(text).toContain('GPT Prolite wk 3%')
+  })
+})
+
 describe('StatusRule session title', () => {
   it('marks only estimated context occupancy at every visible width', () => {
     for (const cols of [80, 120, 200]) {

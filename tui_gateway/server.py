@@ -1607,6 +1607,11 @@ def _session_info(agent, session: dict | None = None) -> dict:
         "usage": _session_usage_snapshot(session),
         "profile_name": profile_name_for_home(sess.get("profile_home")) or _current_profile_name(),
     }
+    if agent is not None:
+        with contextlib.suppress(Exception):
+            from tui_gateway.methods_session import _provider_quota
+            if quota := _provider_quota(agent):
+                info["usage"]["provider_quota"] = quota
     with contextlib.suppress(Exception):
         from hermes_cli import __release_date__
         from hermes_cli.version_info import get_version_info

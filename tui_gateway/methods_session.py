@@ -5,12 +5,79 @@ helpers (``_sessions``, ``_ok``, ``_err``, ...) bare; module-level helpers are p
 server.py the same way (tests monkeypatching ``server.X`` still intercept)."""
 
 import contextlib
+import threading
+import time
 
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
 method = _registry.method
 _profile_scoped = _registry.profile_scoped
+
+_PROVIDER_QUOTA_TTL = 120.0
+_provider_quota_lock = threading.Lock()
+_provider_quota_cache: dict[tuple[str, str], tuple[float, dict | None]] = {}
+
+
+def _provider_quota(agent) -> dict | None:
+    """Return a small cached provider-quota payload for the Ink status rule.
+
+    ``session.usage`` is polled every second while a turn is live, so quota APIs
+    must never be called on every snapshot.  Fail-open: token usage remains
+    available when a provider quota endpoint is unavailable.
+    """
+    if agent is None:
+        return None
+    provider = str(getattr(agent, "provider", "") or "").strip().lower()
+    model = str(getattr(agent, "model", "") or "").strip()
+    key = (provider, model)
+    now = time.monotonic()
+    with _provider_quota_lock:
+        cached = _provider_quota_cache.get(key)
+        if cached and now - cached[0] < _PROVIDER_QUOTA_TTL:
+            return cached[1]
+
+    result = None
+    try:
+        if provider == "openai-codex" and ("gpt" in model.lower() or "codex" in model.lower()):
+            from agent.account_usage import fetch_account_usage
+            snapshot = fetch_account_usage(
+                provider,
+                base_url=getattr(agent, "base_url", None),
+                api_key=getattr(agent, "api_key", None),
+            )
+            if snapshot and getattr(snapshot, "available", False):
+                result = {
+                    "label": "GPT",
+                    "plan": getattr(snapshot, "plan", None),
+                    "windows": [
+                        {
+                            "label": str(getattr(window, "label", "") or ""),
+                            "used_percent": getattr(window, "used_percent", None),
+                            "reset_at": ((reset_at.isoformat() if reset_at else None)
+                                         if (reset_at := getattr(window, "reset_at", None)) else None),
+                        }
+                        for window in (getattr(snapshot, "windows", ()) or ())
+                    ],
+                }
+        elif provider in {"zai", "zhipu"} and "glm" in model.lower():
+            from hermes_cli.glm_status import fetch_quota
+            quota = fetch_quota()
+            if quota:
+                result = {
+                    "label": "GLM",
+                    "plan": quota.get("level"),
+                    "windows": [
+                        {"label": "5h", "used_percent": quota.get("five_pct")},
+                        {"label": "wk", "used_percent": quota.get("week_pct")},
+                    ],
+                }
+    except Exception:
+        result = None
+
+    with _provider_quota_lock:
+        _provider_quota_cache[key] = (now, result)
+    return result
 
 
 # ── shared handler plumbing ──────────────────────────────────────────
@@ -143,10 +210,27 @@ def _auto_resume_denied_source(row: dict) -> bool:
     return source in _LISTING_DENY_SOURCES or source == "unknown"
 
 
+# ``cron`` scheduled/watchdog runs are also noise in a resume picker or auto-resume; keep them out
+# of the human-facing listing while leaving ``_denied_source`` (used by exact-title lookup) alone.
+_LISTING_HIDDEN_SOURCES = _LISTING_DENY_SOURCES | {"cron"}
+
+
 def _listing_rows(db, limit: int, **kwargs) -> list:
-    """Human-facing ``list_sessions_rich`` rows (most recent first), deny-list applied."""
+    """Human-facing ``list_sessions_rich`` rows (most recent first), deny-list applied.
+
+    Also drops ``cron`` scheduled runs and one-shot probe debris (``ping``/greeting/tool-inventory
+    prompts) so a resume picker shows real conversations only. Callers over-fetch, since these
+    filters run after the query.
+    """
+    from hermes_cli.session_listing import is_ping_probe_session
+
     rows = db.list_sessions_rich(source=None, limit=limit, order_by_last_active=True, compact_rows=True, **kwargs)
-    return [row for row in rows if not _denied_source(row)]
+    return [
+        row for row in rows
+        if not _denied_source(row)
+        and (row.get("source") or "").strip().lower() not in _LISTING_HIDDEN_SOURCES
+        and not is_ping_probe_session(row)
+    ]
 
 
 def _snapshot_sessions(rid):
@@ -578,6 +662,7 @@ def _(rid, params: dict) -> dict:
             for row in rows[:1]:
                 return _ok(rid, {"session_id": row.get("id"), "title": row.get("title") or "",
                                  "started_at": row.get("started_at") or 0, "source": row.get("source") or ""})
+            return _ok(rid, {"session_id": None})
         except Exception:
             logger.exception("session.most_recent failed")
         return _ok(rid, {"session_id": None})
@@ -1450,6 +1535,8 @@ def _(rid, params: dict, session: dict) -> dict:
     usage: dict = _session_usage_snapshot(session)
     if session.get("agent") is None and not usage:
         usage = {"calls": 0, "input": 0, "output": 0, "total": 0}
+    if quota := _provider_quota(session.get("agent")):
+        usage["provider_quota"] = quota
     # Nous credits are agent-independent (portal fetch); fail-open when absent.
     with contextlib.suppress(Exception):
         from agent.account_usage import nous_credits_lines

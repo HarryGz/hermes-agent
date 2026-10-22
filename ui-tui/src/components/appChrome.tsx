@@ -346,6 +346,7 @@ export interface StatusBarSegments {
   compressions: boolean
   duration: boolean
   latency: boolean
+  quota: boolean
   subagents: boolean
   tps: boolean
   voice: boolean
@@ -364,6 +365,7 @@ export function statusBarSegments(cols: number): StatusBarSegments {
     subagents: w >= 92,
     cacheHit: w >= 96,
     latency: w >= 104,
+    quota: w >= 52,
     tps: w >= 110
   }
 }
@@ -505,6 +507,26 @@ const shortModelLabel = (model: string) =>
 const modelLabel = (model: string, effort?: string, fast?: boolean, effortWire?: string) =>
   [shortModelLabel(model), effortLabel(effort, effortWire), fast ? tr('status.fast') : ''].filter(Boolean).join(' ')
 
+function providerQuotaLabel(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') {
+    return ''
+  }
+  const quota = raw as { label?: unknown; plan?: unknown; windows?: unknown }
+  const label = typeof quota.label === 'string' ? quota.label : ''
+  const plan = typeof quota.plan === 'string' && quota.plan ? ` ${quota.plan}` : ''
+  const windows = Array.isArray(quota.windows) ? quota.windows : []
+  const parts = windows.slice(0, 2).flatMap(window => {
+    if (!window || typeof window !== 'object') return []
+    const row = window as { label?: unknown; used_percent?: unknown }
+    const name = typeof row.label === 'string' ? row.label : ''
+    const pct = typeof row.used_percent === 'number' && Number.isFinite(row.used_percent)
+      ? `${Math.round(Math.max(0, Math.min(100, row.used_percent)))}%`
+      : '--'
+    return name ? [`${name} ${pct}`] : []
+  })
+  return [label, plan.trim(), ...parts].filter(Boolean).join(' ')
+}
+
 export function GoodVibesHeart({ tick, t }: { tick: number; t: Theme }) {
   const [active, setActive] = useState(false)
   const [color, setColor] = useState(t.color.accent)
@@ -583,6 +605,7 @@ export function StatusRule({
 
   const bar = !segs.compactCtx && usage.context_max && ok('context_pct') ? ctxBar(pct) : ''
   const modelText = modelLabel(model, modelReasoningEffort, modelFast, modelReasoningEffortWire)
+  const quotaText = providerQuotaLabel(usage.provider_quota)
 
   // Battery read-out — the first (pinned) status-bar element when enabled.
   const showBattery = !!battery && battery.available && battery.percent != null && ok('battery')
@@ -655,6 +678,7 @@ export function StatusRule({
       : ''
 
   const showBar = !!bar && fits(SEP + stringWidth(`[${bar}] ${pct != null ? `${contextMark}${pct}%` : ''}`))
+  const showQuota = segs.quota && ok('provider_usage') && !!quotaText && fits(SEP + stringWidth(quotaText))
   const showDuration = segs.duration && ok('duration') && !!sessionStartedAt && fits(SEP + MAX_DURATION_WIDTH)
 
   // Idle clock — time since the last final agent response. Hidden while busy
@@ -786,6 +810,12 @@ export function StatusRule({
             {' │ '}
             <Text color={barColor}>[{bar}]</Text>{' '}
             <Text color={barColor}>{pct != null ? `${contextMark}${pct}%` : ''}</Text>
+          </Text>
+        ) : null}
+        {showQuota ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            {' │ '}
+            {quotaText}
           </Text>
         ) : null}
         {showDuration ? (
