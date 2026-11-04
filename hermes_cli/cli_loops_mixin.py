@@ -216,6 +216,11 @@ class CLILoopsMixin:
                 signal, session_id=getattr(self, "session_id", None), agent=getattr(self, "agent", None),
                 provider=getattr(self, "provider", None), model=getattr(self, "model", None), turns=turns)
 
+    def _cmd_continue(self, cmd_original: str):
+        from cli import _cprint
+        _cprint("  /continue requires an active Gateway session.")
+        return True
+
     def _cmd_retry(self, cmd_original: str):
         retry_msg = self.retry_last()
         if retry_msg:

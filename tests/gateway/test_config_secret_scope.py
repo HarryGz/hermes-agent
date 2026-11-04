@@ -295,6 +295,26 @@ def test_a_legacy_reference_keeps_the_endpoint_guard(tmp_path, monkeypatch):
         assert refused.value.field == 'config_secret_ref' and refused.value.detail
 
 
+@pytest.mark.asyncio
+async def test_continue_migrates_a_legacy_reference_after_unrelated_policy_edits(tmp_path, monkeypatch):
+    """The explicit /continue recovery rebinds unchanged secrets without changing the transcript."""
+    from dataclasses import replace
+    from gateway.session_policy_migration import migrate_legacy_config_reference
+    from gateway.session_policy_credentials import PREFIX
+
+    _home_dir, store, cold, sid = await _older_session(tmp_path, monkeypatch)
+    try:
+        old = _stored_policy(store, sid)
+        # Simulate a policy edit made after the older gateway stamped its whole-policy hash.
+        changed = replace(old, model='m2', safe_mode=False)
+        migrated = migrate_legacy_config_reference(cold, sid, changed)
+        source = json.loads(migrated.config_secret_ref[len(PREFIX):])
+        assert 'bound' in source
+        assert migrated.config(cold)['model']['api_key'] == 'route-token'
+    finally:
+        store.close_all_db_handles()
+
+
 # Independent review round 2: every route shape a consumer reads binds its secret to the route that owns
 # it. A dictionary-form fallback is ONE route (its key's owner is the whole dictionary, not the key), and
 # an ``auxiliary.<task>`` route or one of its ``fallback_chain`` entries authenticates the endpoint it

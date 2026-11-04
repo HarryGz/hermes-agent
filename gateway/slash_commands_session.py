@@ -421,7 +421,72 @@ class GatewaySessionCommandsMixin:
             return self._same_matrix_room(source, self._gateway_session_origin_for_id(sid))
         return await self._resume_target_allowed(source, sid, allow_override=False)
 
-    # ------------------------------------------------------------------ /retry, /undo
+    # ------------------------------------------------------------------ /retry, /continue, /undo
+
+    async def _handle_continue_command(self, event: MessageEvent) -> str:
+        """Safely migrate an old frozen config-secret reference and keep this session intact."""
+        from dataclasses import asdict
+        from gateway.session_authorities import active_authority
+        from gateway.session_policy import policy_for_source
+        from gateway.session_policy_migration import migrate_legacy_config_reference
+        from gateway.session_contract import SessionRef
+        from hermes_state_local import local_receipt
+        from hermes_state_mutation_prepared import commit_refreshed_policy
+
+        if not self._is_user_authorized_for_source(event.source):
+            return "You are not authorized to continue this session."
+        # With an argument, /continue has the same target-selection semantics as /resume,
+        # then repairs the selected session instead of the session that was active before it.
+        args = event.get_command_args().strip()
+        if args:
+            source = await asyncio.to_thread(self._normalize_source_for_session_key, event.source)
+            session_key = self._session_key_for_source(source)
+            try:
+                parts = shlex.split(args)
+            except ValueError as exc:
+                return t("gateway.resume.parse_error", error=exc)
+            allow_all = "--all" in parts
+            name = _strip_resume_name(parts)
+            if not name:
+                return await self._handle_resume_command(dataclasses.replace(event, text="/resume"))
+            resolved = await self._resolve_resume_target(source, session_key, name, allow_all)
+            if isinstance(resolved, str):
+                return resolved
+            target_id, target_name = resolved
+            from gateway.session_route_recovery import conversation_head
+            _target_authority, target_owner, target_head = await conversation_head(self, target_id)
+            if target_owner is not None:
+                target_id = target_head
+            resume_reply = await self._handle_resume_command(
+                dataclasses.replace(event, text=f"/resume {args}"))
+            current_after = await self.async_session_store.get_or_create_session(source)
+            if current_after.session_id != target_id:
+                return resume_reply
+        authority = active_authority(self)
+        if authority is None:
+            return "No session owner is available."
+        session_key = self._session_key_for_source(event.source)
+        sid = authority.logical_owner(self.session_store.peek_session_id(session_key))
+        if not sid or sid not in authority.sessions:
+            return "No resumable local session is attached to this chat."
+        ref = SessionRef(authority.profile_id, sid)
+        if authority._handle(ref).execution_state != "idle":
+            return "The session is still running; run /continue after it becomes idle."
+        old = policy_for_source(self, authority.sessions[sid].source)
+        if old is None or old.config_secret_ref is None:
+            return "This session has no stale config-secret reference to repair."
+        stored = local_receipt(authority.db, sid)["policy"]
+        new = migrate_legacy_config_reference(authority, sid, old)
+        if new == old:
+            return "This session already has a current scoped credential reference."
+        generation = authority.db.get_session(sid)["runtime_generation"]
+        await asyncio.to_thread(
+            commit_refreshed_policy, authority.db, epoch=authority.epoch, session_id=sid,
+            old=stored, new=asdict(new), generation=generation,
+        )
+        from gateway.session_policy_refresh import _publish
+        await _publish(authority, ref)
+        return "Session credential binding repaired. The original transcript and session ID were preserved; you can continue now."
 
     async def _handle_retry_command(self, event: MessageEvent) -> str:
         """Handle /retry command - re-send the last user message."""

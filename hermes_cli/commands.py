@@ -98,6 +98,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("save", "Export the current conversation (bare /save shows usage)", "Session",
                args_hint="<json|md|html> [filename] [redact]"),
     CommandDef("retry", "Retry the last message (resend to agent)", "Session"),
+    CommandDef("continue", "Repair a stale session credential binding without changing its transcript", "Session",
+               busy_policy="reject", desktop="terminal"),
     CommandDef("prompt", "Compose your next prompt in $EDITOR (markdown), then send it", "Session",
                cli_only=True, args_hint="[initial text]", aliases=("compose",)),
     CommandDef("undo", "Back up N user turns and re-prompt (default 1)", "Session",
@@ -345,6 +347,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="[nous|local]"),
 
     # Exit
+    CommandDef("leave", "Safely check pending work before leaving the CLI", "Exit",
+               cli_only=True, args_hint="[--stop]"),
     CommandDef("quit", "Exit the CLI (use --delete to also remove session history)", "Exit",
                cli_only=True, aliases=("exit",), args_hint="[--delete]", desktop="terminal")]
 

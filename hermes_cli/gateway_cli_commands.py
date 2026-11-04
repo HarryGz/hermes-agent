@@ -45,7 +45,21 @@ def _handoff(cli, connection, cmd):
     return True
 
 
-_ROUTES = {"diff": _diff, "reload": _reload, "handoff": _handoff}
+def _continue(cli, connection, cmd):
+    """Repair the gateway-owned session's stale credential binding."""
+    from cli import _cprint
+    try:
+        reply = connection.call("slash.exec", session_id=cli.session_id,
+                                command=cmd.lstrip("/")) or {}
+    except GatewayClientError as exc:
+        _cprint(f"  /continue: {exc}")
+        return True
+    if reply.get("output") or reply.get("notice"):
+        _cprint(f"  {reply.get('notice') or reply.get('output')}")
+    return True
+
+
+_ROUTES = {"diff": _diff, "reload": _reload, "handoff": _handoff, "continue": _continue}
 # Named refusals: nothing runs, so the gateway is not told (no ``pre_command``).
 REFUSED = frozenset({"handoff"})
 
