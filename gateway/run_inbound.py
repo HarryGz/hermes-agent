@@ -1320,6 +1320,14 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                 logger.info("Refusing new turn for session %s — external drain active.", _quick_key)
                 return t("gateway.busy.draining_maintenance")
 
+        # Local customization (gateway/session_idle_reset.py): a route silent past
+        # gateway.session_idle_reset_minutes starts a fresh session on its next plain
+        # message. Fail-open: any error leaves the message on the existing session.
+        if not is_internal and not getattr(event, "_fifo_only", False):
+            with suppress(Exception):
+                from gateway.session_idle_reset import maybe_idle_reset
+                await maybe_idle_reset(self, event, source, _quick_key)
+
         # Claim this session before any await: many awaits sit between here and _run_agent
         # registering the real AIAgent; without this sentinel a second message during any of them
         # passes the "already running" guard and spins up a duplicate agent for the same session.
