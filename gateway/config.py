@@ -613,6 +613,11 @@ class GatewayConfig:
     group_sessions_per_user: bool = True  # Isolate group sessions per participant when user IDs exist
     thread_sessions_per_user: bool = False  # False = threads shared across participants
     max_concurrent_sessions: Optional[int] = None  # Positive int caps simultaneous active sessions
+    # Local customization: a chat route silent longer than this many minutes starts a fresh
+    # session on its next plain (non-command) message; 0 disables. gateway.session_idle_reset_minutes
+    session_idle_reset_minutes: int = 0
+    # Optional platform filter (Platform values, e.g. ["feishu"]); None/empty applies to all.
+    session_idle_reset_platforms: Optional[list[str]] = None
     # The default profile's gateway serves every profile on the host (profiles stamped into session
     # keys, per-profile adapters/credentials). On by default (DEFAULT_CONFIG), but UNSET here is
     # ``None``: a request the gateway settles at boot, not a verdict. ``hermes_cli.gateway_multiplex_mode
@@ -703,6 +708,8 @@ class GatewayConfig:
             **{name: getattr(self, name) for name in self._SCALAR_DICT_FIELDS},
             "streaming": self.streaming.to_dict(),
             "session_store_max_age_days": self.session_store_max_age_days,
+            "session_idle_reset_minutes": self.session_idle_reset_minutes,
+            "session_idle_reset_platforms": self.session_idle_reset_platforms,
             "profile_routes": [
                 {k: v for k, v in asdict(r).items() if k != "user_id" or v is not None}
                 if is_dataclass(r) and not isinstance(r, type) else r
@@ -779,6 +786,16 @@ class GatewayConfig:
         except (TypeError, ValueError):
             session_store_max_age_days = 90
 
+        # Local customization: idle auto-rotation window (0 = off) + optional platform filter.
+        session_idle_reset_minutes = _coerce_int(pick("session_idle_reset_minutes"), 0)
+        if session_idle_reset_minutes < 0:
+            session_idle_reset_minutes = 0
+        _idle_platforms_raw = pick("session_idle_reset_platforms")
+        session_idle_reset_platforms = (
+            [str(name).strip() for name in _idle_platforms_raw if str(name).strip()]
+            if isinstance(_idle_platforms_raw, (list, tuple)) else None
+        )
+
         from gateway.profile_routing import parse_profile_routes
 
         return cls(
@@ -802,6 +819,8 @@ class GatewayConfig:
             unauthorized_dm_decline_message=str(data.get("unauthorized_dm_decline_message") or "").strip(),
             streaming=StreamingConfig.from_dict(data.get("streaming", {})),
             session_store_max_age_days=session_store_max_age_days,
+            session_idle_reset_minutes=session_idle_reset_minutes,
+            session_idle_reset_platforms=session_idle_reset_platforms,
             profile_routes=parse_profile_routes(data.get("profile_routes") or []),
         )
 

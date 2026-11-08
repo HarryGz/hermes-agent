@@ -193,8 +193,11 @@ class GatewaySessionCommandsMixin:
             authority._publish_route(event.source, sid, session_key)
         return await discard_lost_turns(authority, sid)
 
-    async def _handle_reset_command(self, event: MessageEvent) -> str | EphemeralReply:
-        """Handle /new or /reset command."""
+    async def _handle_reset_command(
+        self, event: MessageEvent, *, title_arg: str | None = None
+    ) -> str | EphemeralReply:
+        """Handle /new or /reset command. ``title_arg`` overrides the title source (the idle
+        auto-rotation passes "" so a plain message's text never becomes the new title)."""
         source = event.source
         session_key = self._session_key_for_source(source)
         await self._hm_stop_owner_turn(session_key)  # idle and confirmed resets too (N53)
@@ -241,7 +244,7 @@ class GatewaySessionCommandsMixin:
             new_entry = await self.async_session_store.get_or_create_session(source, force_new=True)
             default_header = t("gateway.reset.header_new")
         header = await asyncio.to_thread(self._telegram_topic_new_header, source) or default_header
-        _title_arg = event.get_command_args().strip()
+        _title_arg = (event.get_command_args() if title_arg is None else title_arg).strip()
         if _title_arg and self._session_db and new_entry:
             header = await self._reset_titled_header(header, new_entry.session_id, _title_arg)
         # Telegram DM topic lane: rebind (chat_id, thread_id) → session_id so the next message uses
